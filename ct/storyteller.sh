@@ -12,7 +12,7 @@ var_ram="${var_ram:-10240}"
 var_disk="${var_disk:-20}"
 var_os="${var_os:-debian}"
 var_version="${var_version:-13}"
-var_arm64="${var_arm64:-no}"
+var_arm64="${var_arm64:-yes}"
 var_unprivileged="${var_unprivileged:-1}"
 
 header_info "$APP"
@@ -29,6 +29,8 @@ function update_script() {
     msg_error "No ${APP} Installation Found!"
     exit
   fi
+
+  NODE_VERSION="24" NODE_MODULE="corepack,yarn" setup_nodejs
 
   if check_for_gl_release "storyteller" "storyteller-platform/storyteller"; then
     msg_info "Stopping Service"
@@ -48,7 +50,7 @@ function update_script() {
     msg_info "Rebuilding Storyteller"
     cd /opt/storyteller
     export NODE_OPTIONS="--max-old-space-size=4096"
-    $STD corepack enable
+
     $STD corepack yarn install --network-timeout 600000
     $STD gcc -g -fPIC -rdynamic -shared web/sqlite/uuid.c -o web/sqlite/uuid.c.so
     export CI=1

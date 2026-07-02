@@ -30,6 +30,8 @@ function update_script() {
     exit
   fi
 
+  NODE_VERSION="24" NODE_MODULE="corepack" setup_nodejs
+
   if check_for_gh_release "databasus" "databasus/databasus"; then
     msg_info "Stopping Databasus"
     $STD systemctl stop databasus
@@ -50,11 +52,11 @@ function update_script() {
       [[ "$MONGO_ARCH" == "arm64" ]] && MONGO_DIST="ubuntu2204"
       fetch_and_deploy_from_url "https://fastdl.mongodb.org/tools/db/mongodb-database-tools-${MONGO_DIST}-${MONGO_ARCH}-100.16.1.deb"
     fi
+    ensure_dependencies mariadb-client
+    mkdir -p /usr/local/mariadb-{10.6,12.1}/bin /usr/local/mysql-{5.7,8.0,8.4,9}/bin /usr/local/mongodb-database-tools/bin
     [[ -f /usr/bin/mongodump ]] && ln -sf /usr/bin/mongodump /usr/local/mongodb-database-tools/bin/mongodump
     [[ -f /usr/bin/mongorestore ]] && ln -sf /usr/bin/mongorestore /usr/local/mongodb-database-tools/bin/mongorestore
     # Create MariaDB and MySQL client symlinks for compatibility
-    ensure_dependencies mariadb-client
-    mkdir -p /usr/local/mariadb-{10.6,12.1}/bin /usr/local/mysql-{5.7,8.0,8.4,9}/bin /usr/local/mongodb-database-tools/bin
     for dir in /usr/local/mariadb-{10.6,12.1}/bin; do
       ln -sf /usr/bin/mariadb-dump "$dir/mariadb-dump"
       ln -sf /usr/bin/mariadb "$dir/mariadb"
@@ -70,14 +72,14 @@ function update_script() {
     msg_info "Updating Databasus"
     export COREPACK_ENABLE_DOWNLOAD_PROMPT=0
     cd /opt/databasus/frontend
-    $STD corepack enable
+
     $STD corepack prepare pnpm@latest --activate
     $STD pnpm install --frozen-lockfile
     $STD pnpm run build
     cd /opt/databasus/backend
     $STD go mod download
     $STD /root/go/bin/swag init -g cmd/main.go -o swagger
-    $STD env CGO_ENABLED=0 GOOS=linux GOARCH=$(arch_resolve) go build -o databasus ./cmd/main.go
+    $STD env CGO_ENABLED=0 GOOS=linux GOARCH=$(arch_resolve) go build -o databasus ./cmd
     mv /opt/databasus/backend/databasus /opt/databasus/databasus
     mkdir -p /opt/databasus/ui/build
     cp -r /opt/databasus/frontend/dist/* /opt/databasus/ui/build/

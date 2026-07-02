@@ -110,7 +110,7 @@ export AUTOGRAPH_VERBOSITY=0
 export GLOG_minloglevel=3
 export GLOG_logtostderr=0
 
-fetch_and_deploy_gh_release "frigate" "blakeblackshear/frigate" "tarball" "v0.17.1" "/opt/frigate"
+fetch_and_deploy_gh_release "frigate" "blakeblackshear/frigate" "tarball" "v0.17.2" "/opt/frigate"
 
 msg_info "Building Nginx"
 $STD bash /opt/frigate/docker/main/build_nginx.sh
@@ -290,7 +290,7 @@ detect:
 EOF
 
 if grep -q -o -m1 -E 'avx[^ ]*|sse4_2' /proc/cpuinfo && [[ -f /openvino-model/ssdlite_mobilenet_v2.xml ]] && [[ -f /openvino-model/coco_91cl_bkgr.txt ]]; then
-  cat <<EOF >>/config/config.yml
+  cat <<EOF >/config/config.yml
 ffmpeg:
   hwaccel_args: auto
 detectors:
@@ -306,7 +306,7 @@ model:
   labelmap_path: /openvino-model/coco_91cl_bkgr.txt
 EOF
 else
-  cat <<EOF >>/config/config.yml
+  cat <<EOF >/config/config.yml
 ffmpeg:
   hwaccel_args: auto
 model:
