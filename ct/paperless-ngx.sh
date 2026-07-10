@@ -49,13 +49,14 @@ function update_script() {
     fi
   fi
 
-  RELEASE="v2.20.15"
-  if check_for_gh_release "paperless" "paperless-ngx/paperless-ngx" "${RELEASE}" "v3 needs further testing"; then
+  if check_for_gh_release "paperless" "paperless-ngx/paperless-ngx"; then
     msg_info "Stopping all Paperless-ngx Services"
     systemctl stop paperless-consumer paperless-webserver paperless-scheduler paperless-task-queue
     msg_ok "Stopped all Paperless-ngx Services"
 
     if grep -q "uv run" /etc/systemd/system/paperless-webserver.service; then
+      PAPERLESS_INSTALLED_VERSION=""
+      [[ -f ~/.paperless ]] && PAPERLESS_INSTALLED_VERSION="$(<~/.paperless)"
 
       msg_info "Backing up configuration"
       local BACKUP_DIR="/opt/paperless_backup_$$"
@@ -64,7 +65,7 @@ function update_script() {
       msg_ok "Backup completed to $BACKUP_DIR"
 
       PYTHON_VERSION="3.13" setup_uv
-      CLEAN_INSTALL=1 fetch_and_deploy_gh_release "paperless" "paperless-ngx/paperless-ngx" "prebuild" "${RELEASE}" "/opt/paperless" "paperless*tar.xz"
+      CLEAN_INSTALL=1 fetch_and_deploy_gh_release "paperless" "paperless-ngx/paperless-ngx" "prebuild" "v3.0.0-beta.rc1" "/opt/paperless" "paperless*tar.xz"
       CLEAN_INSTALL=1 fetch_and_deploy_gh_release "jbig2enc" "ie13/jbig2enc" "tarball" "latest" "/opt/jbig2enc"
 
       . /etc/os-release
@@ -73,14 +74,81 @@ function update_script() {
       else
         ensure_dependencies ghostscript
       fi
+      ensure_dependencies gnupg
 
       msg_info "Updating Paperless-ngx"
       cp -r "$BACKUP_DIR"/* /opt/paperless/
+      if [[ "$PAPERLESS_INSTALLED_VERSION" == 2.* ]]; then
+        msg_info "Migrating Paperless-ngx v2 configuration to v3"
+        PAPERLESS_CONF="/opt/paperless/paperless.conf"
+
+        SECRET_KEY_CURRENT="$(sed -n 's|^PAPERLESS_SECRET_KEY=||p' "$PAPERLESS_CONF" | tail -n1)"
+        DBENGINE="$(sed -n 's|^PAPERLESS_DBENGINE=||p' "$PAPERLESS_CONF" | tail -n1)"
+        DB_OPTIONS_DEPRECATED="$(sed -n '/^PAPERLESS_DBSSLMODE=/p;/^PAPERLESS_DBSSLROOTCERT=/p;/^PAPERLESS_DBSSLCERT=/p;/^PAPERLESS_DBSSLKEY=/p;/^PAPERLESS_DB_POOLSIZE=/p;/^PAPERLESS_DB_TIMEOUT=/p' "$PAPERLESS_CONF")"
+        CONSUMER_POLLING="$(sed -n 's|^PAPERLESS_CONSUMER_POLLING=||p' "$PAPERLESS_CONF" | tail -n1)"
+        CONSUMER_POLLING_INTERVAL="$(sed -n 's|^PAPERLESS_CONSUMER_POLLING_INTERVAL=||p' "$PAPERLESS_CONF" | tail -n1)"
+        CONSUMER_INOTIFY_DELAY="$(sed -n 's|^PAPERLESS_CONSUMER_INOTIFY_DELAY=||p' "$PAPERLESS_CONF" | tail -n1)"
+        CONSUMER_STABILITY_DELAY="$(sed -n 's|^PAPERLESS_CONSUMER_STABILITY_DELAY=||p' "$PAPERLESS_CONF" | tail -n1)"
+        OCR_MODE="$(sed -n 's|^PAPERLESS_OCR_MODE=||p' "$PAPERLESS_CONF" | tail -n1)"
+        OCR_SKIP_ARCHIVE="$(sed -n 's|^PAPERLESS_OCR_SKIP_ARCHIVE_FILE=||p' "$PAPERLESS_CONF" | tail -n1)"
+        ARCHIVE_FILE_GENERATION="$(sed -n 's|^PAPERLESS_ARCHIVE_FILE_GENERATION=||p' "$PAPERLESS_CONF" | tail -n1)"
+
+        sed -i \
+          -e '/^PAPERLESS_CONSUMER_POLLING=/d' \
+          -e '/^PAPERLESS_CONSUMER_INOTIFY_DELAY=/d' \
+          -e '/^PAPERLESS_CONSUMER_POLLING_DELAY=/d' \
+          -e '/^PAPERLESS_CONSUMER_POLLING_RETRY_COUNT=/d' \
+          -e '/^PAPERLESS_CONSUMER_BARCODE_SCANNER=/d' \
+          -e '/^PAPERLESS_OCR_SKIP_ARCHIVE_FILE=/d' \
+          -e 's|^PAPERLESS_OCR_MODE="\?skip"\?$|PAPERLESS_OCR_MODE=auto|' \
+          -e 's|^PAPERLESS_OCR_MODE="\?skip_noarchive"\?$|PAPERLESS_OCR_MODE=auto|' \
+          "$PAPERLESS_CONF"
+
+        [[ -n "$DB_OPTIONS_DEPRECATED" ]] &&
+          msg_warn "Deprecated Paperless DB options detected; migrate them manually to PAPERLESS_DB_OPTIONS."
+        if [[ -z "$SECRET_KEY_CURRENT" ]]; then
+          SECRET_KEY="$(dd if=/dev/urandom bs=32 count=1 2>/dev/null | od -An -tx1 | tr -d ' \n')"
+          sed -i \
+            -e '/^#\?PAPERLESS_SECRET_KEY=/d' \
+            -e "\$a\\PAPERLESS_SECRET_KEY=$SECRET_KEY" \
+            "$PAPERLESS_CONF"
+          printf "Paperless-ngx Secret Key: %s\n" "$SECRET_KEY" >>~/paperless-ngx.creds
+        fi
+        [[ -z "$DBENGINE" ]] && sed -i '$a\PAPERLESS_DBENGINE=postgresql' "$PAPERLESS_CONF"
+        [[ -n "$CONSUMER_POLLING" && -z "$CONSUMER_POLLING_INTERVAL" ]] &&
+          sed -i "\$a\\PAPERLESS_CONSUMER_POLLING_INTERVAL=$CONSUMER_POLLING" "$PAPERLESS_CONF"
+        [[ -n "$CONSUMER_INOTIFY_DELAY" && -z "$CONSUMER_STABILITY_DELAY" ]] &&
+          sed -i "\$a\\PAPERLESS_CONSUMER_STABILITY_DELAY=$CONSUMER_INOTIFY_DELAY" "$PAPERLESS_CONF"
+        if [[ -z "$ARCHIVE_FILE_GENERATION" ]]; then
+          if [[ "$OCR_MODE" == "skip_noarchive" || "$OCR_MODE" == "\"skip_noarchive\"" ]]; then
+            sed -i '$a\PAPERLESS_ARCHIVE_FILE_GENERATION=never' "$PAPERLESS_CONF"
+          elif [[ "$OCR_SKIP_ARCHIVE" == "never" || "$OCR_SKIP_ARCHIVE" == "\"never\"" ]]; then
+            sed -i '$a\PAPERLESS_ARCHIVE_FILE_GENERATION=always' "$PAPERLESS_CONF"
+          elif [[ "$OCR_SKIP_ARCHIVE" == "with_text" || "$OCR_SKIP_ARCHIVE" == "\"with_text\"" ]]; then
+            sed -i '$a\PAPERLESS_ARCHIVE_FILE_GENERATION=auto' "$PAPERLESS_CONF"
+          elif [[ "$OCR_SKIP_ARCHIVE" == "always" || "$OCR_SKIP_ARCHIVE" == "\"always\"" ]]; then
+            sed -i '$a\PAPERLESS_ARCHIVE_FILE_GENERATION=never' "$PAPERLESS_CONF"
+          fi
+        fi
+        [[ -n "$(sed -n '/^PAPERLESS_CONSUMER_IGNORE_PATTERNS=/p' "$PAPERLESS_CONF")" ]] &&
+          msg_warn "PAPERLESS_CONSUMER_IGNORE_PATTERNS now uses regex patterns; please verify custom values."
+        [[ -n "$(sed -n '/^PAPERLESS_PRE_CONSUME_SCRIPT=/p;/^PAPERLESS_POST_CONSUME_SCRIPT=/p' "$PAPERLESS_CONF")" ]] &&
+          msg_warn "Pre/post consume scripts no longer receive positional arguments in v3; please verify custom scripts."
+        msg_ok "Migrated Paperless-ngx configuration"
+      fi
+
+      sed -i 's|^ExecStart=.*|ExecStart=uv run -- granian --interface asginl --ws --loop uvloop "paperless.asgi:application"|' /etc/systemd/system/paperless-webserver.service
+      $STD systemctl daemon-reload
       cd /opt/paperless
       $STD uv sync --all-extras
+      $STD uv pip install sqlite_vec
       cd /opt/paperless/src
       $STD uv run -- python manage.py migrate
       msg_ok "Updated Paperless-ngx"
+
+      # zxing-cpp replaces pyzbar in v3, libzbar is no longer required
+      $STD apt -y purge libzbar0t64 libzbar0 2>/dev/null || true
+      $STD apt -y autoremove 2>/dev/null || true
 
       rm -rf "$BACKUP_DIR"
 
@@ -139,7 +207,7 @@ function update_script() {
       msg_ok "Backup completed to $BACKUP_DIR"
 
       PYTHON_VERSION="3.13" setup_uv
-      CLEAN_INSTALL=1 fetch_and_deploy_gh_release "paperless" "paperless-ngx/paperless-ngx" "prebuild" "${RELEASE}" "/opt/paperless" "paperless*tar.xz"
+      CLEAN_INSTALL=1 fetch_and_deploy_gh_release "paperless" "paperless-ngx/paperless-ngx" "prebuild" "v2.20.15" "/opt/paperless" "paperless*tar.xz"
       CLEAN_INSTALL=1 fetch_and_deploy_gh_release "jbig2enc" "ie13/jbig2enc" "tarball" "latest" "/opt/jbig2enc"
 
       . /etc/os-release
@@ -150,14 +218,17 @@ function update_script() {
         ensure_dependencies ghostscript
         msg_ok "Installed Ghostscript"
       fi
+      ensure_dependencies gnupg
 
-      msg_info "Updating Paperless-ngx"
+      msg_info "Updating Paperless-ngx to v2.20.15"
       cp -r "$BACKUP_DIR"/* /opt/paperless/
       cd /opt/paperless
       $STD uv sync --all-extras
+      $STD uv pip install sqlite_vec
       cd /opt/paperless/src
       $STD uv run -- python manage.py migrate
-      msg_ok "Paperless-ngx migration and update completed"
+      msg_ok "Migrated to uv and updated to v2.20.15 (required before v3)"
+      msg_custom "ℹ️" "Run the update again to complete the upgrade to the latest version (v3)."
 
       rm -rf "$BACKUP_DIR"
       if [[ -d /opt/paperless/backup ]]; then
