@@ -110,7 +110,7 @@ EOF
     msg_ok "Image-processing libraries up to date"
   fi
 
-  RELEASE="v3.0.1"
+  RELEASE="v3.0.2"
   if check_for_gh_release "Immich" "immich-app/immich" "${RELEASE}" "each release is tested individually before the version is updated. Please do not open issues for this"; then
     if [[ $(cat ~/.immich) > "2.5.1" ]]; then
       msg_info "Enabling Maintenance Mode"
@@ -124,7 +124,7 @@ EOF
     systemctl stop immich-web
     systemctl stop immich-ml
     msg_ok "Stopped Services"
-    VCHORD_RELEASE="1.0.0"
+    VCHORD_RELEASE="1.1.1"
     [[ -f ~/.vchord_version ]] && mv ~/.vchord_version ~/.vectorchord
     if check_for_gh_release "VectorChord" "tensorchord/VectorChord" "${VCHORD_RELEASE}" "updated together with Immich after testing"; then
       # dead tuples in smart_search/face_search make the REINDEX below fail with
